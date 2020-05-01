@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Title</title>
+    <link rel="stylesheet" href="css/main_common.css">
+    <link rel="stylesheet" href="css/main.css">
+</head>
+<body>
+<input id="roomId" placeholder="roomTester"/><br/>
+<div>
+    <video id="recorded" autoplay muted></video>
+    <strong id="self"></strong>
+</div>
+<div>
+    <button id="login">login</button>
+    <button id="start">start</button>
+    <button id="stop">stop</button>
+    <button id="clear">clear</button>
+</div>
+<div id="others"></div>
+<div id="con"></div>
+<div id="con2"></div>
+<script>
+    const constranits = {
+        login: 'user_login',
+        logout: 'user_logout',
+        onlineUsers: 'get_online_user'
+    };
+
+    var socket;
+    var rid = 'tester';
+    var uid = new Date().getMilliseconds();
+    var recordedVideo = document.querySelector('video#recorded');
+    var loginButton = document.querySelector('button#login');
+    var startButton = document.querySelector('button#start');
+    var stopButton = document.querySelector('button#stop');
+    var clearButton = document.querySelector('button#clear');
+    loginButton.onclick = login;
+    stopButton.onclick = stopRecording;
+    startButton.onclick = startRecording;
+    clearButton.onclick = clear;
+    var wsHeader;
+
+    function init() {
+
+        var constraints = {
+            audio: true,
+            //video: true
+            video: {width: {min: 640, ideal: 640, max: 640}, height: {min: 480, ideal: 480, max: 480}}
+        };
+
+        //navigator.getUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia ||navigator.mediaDevices.getUserMedia;
+        navigator.mediaDevices.getUserMedia(constraints).then(handleSuccess).catch(handleError);
+
+        wsHeader = 'ws://';
+        if (location.protocol === 'https:') wsHeader = 'wss://';
+    }
+
+    function handleSuccess(stream) {
+        log('getUserMedia() got stream: ', stream);
+        window.stream = stream;
+        recordedVideo.srcObject = stream;
+
+        recordedVideo.onloadedmetadata = function (e) {
+            log("Label: " + stream.label);
+            log("AudioTracks", stream.getAudioTracks());
+            log("VideoTracks", stream.getVideoTracks());
+
+            create();
+
+
+        };
+    }
+
+    function handleError(error) {
+        console.log('navigator.getUserMedia error: ', error.message, error.stack);
+        var msg = JSON.stringify(error);
+        alert('navigator.getUserMedia error: message ' + error.message);
+        alert('navigator.getUserMedia error: stack ' + error.stack);
+        log('navigator.getUserMedia error: ' + error)
+    }
+
+    function validate() {
+        var isSecureOrigin = location.protocol === 'https:' ||
+            location.hostname === 'localhost';
+        if (!isSecureOrigin) {
+            alert('getUserMedia() must be run from a secure origin: HTTPS or localhost.' +
+                '\n\nChanging protocol to HTTPS');
+            location.protocol = 'HTTPS';
+        }
+    }
+
+    var isLogin = false;
+
+    function login() {
+//        alert('login finish');
+//        console.log('login finish');
+
+        if (isLogin) {
+            alert('login finish');
+            return;
+        }
+        validate();
+        init();
+        socket = new WebSocket(wsHeader + window.location.host + "/user?uid=" + uid + '&rid=' + rid);
+        socket.onopen = WSonOpen;
+        socket.onmessage = WSonMessage;
+        socket.onclose = WSonClose;
+        socket.onerror = WSonError;
+    }
+
+    function clear() {
+        //stopRecording();
+        socket.send('clear');
+    }
+
+    function WSonOpen() {
+        console.log("连接已经建立。", "OK", uid);
+        var self = document.getElementById('self');
+        self.innerText = '用户 ' + uid;
+        isLogin = true;
+    }
+
+    function WSonMessage(event) {
+        console.log('正在接收数据...', event.data);
+
+        var data = JSON.parse(event.data);
+        var type = data.type;
+        //处理用户列表
+        if (constranits.login === type) {
+            if (data.user == uid) {
+                console.log('login return');
+                return;
+            }
+            //添加新用户
+            var others = document.getElementById('others');
+            var vid = addVideoNode(data.user, others);
+            var dc = new DataConnection(data.user, uid, vid, rid, mimeType);
+            dc.play = dc.play.bind(dc);
+            document.querySelector('video#' + vid).onclick = dc.play;
+            dataConnections.push(dc);
+            //createVideoNode(user, uid, rid, others);
+        } else if (constranits.logout === type) {
+            //删除新用户
+            var others = document.getElementById('others');
+            var v = document.getElementById(data.user);
+            if (v)
+                others.removeChild(v);
+        } else if (constranits.onlineUsers === type) {
+            //添加新用户
+            var others = document.getElementById('others');
+            var list = data.list;
+            for (var i = 0; i < list.length; i++) {
+                if (list[i] == uid) {
+                    console.log('login return');
+                    continue;
+                }
+                var vid = addVideoNode(list[i], others);
+                var dc = new DataConnection(list[i], uid, vid, rid, mimeType);
+                dc.play = dc.play.bind(dc);
+                document.querySelector('video#' + vid).onclick = dc.play;
+                dataConnections.push(dc);
+                //createVideoNode(user, uid, rid, others);
+            }
+        }
+    }
+
+    function WSonClose() {
+        console.log("连接关闭。", "ERROR");
+        isLogin = false;
+    }
+
+    function WSonError() {
+        console.log("WebSocket错误。", "ERROR");
+        isLogin = false;
+    }
+
+    function addVideoNode(uid, toParent) {
+        let div = document.createElement('div');
+        div.id = uid;
+        let v = document.createElement('video');
+        v.id = 'v' + uid;
+        v.controls = 'controls';
+        v.autoplay = 'autoplay';
+        let name = document.createElement('strong');
+        name.innerText = '用户 ' + uid;
+        div.appendChild(v);
+        div.appendChild(name);
+        toParent.appendChild(div);
+        return v.id;
+    }
+
+    var mediaRecorder;
+
+    function create() {
+        document.getElementById('con').innerHTML = 'mimeType ' + mimeType;
+        try {
+            var options = {mimeType: mimeType};
+            mediaRecorder = new MediaRecorder(window.stream, options);
+        } catch (e) {
+            console.error('Exception while creating MediaRecorder: ' + e);
+            log('Exception while creating MediaRecorder: ' + e);
+            alert('Exception while creating MediaRecorder: '
+                + e + '. mimeType: ' + options.mimeType);
+            document.getElementById('con').innerHTML = 'Exception while creating MediaRecorder: ';
+            return;
+        }
+        log('Created MediaRecorder', mediaRecorder, 'with options', options);
+        mediaRecorder.onstop = handleStop;
+        mediaRecorder.ondataavailable = handleDataAvailable;
+    }
+
+    function startRecording() {
+        //每个blob的时长
+        mediaRecorder.start(1000);
+        console.log('MediaRecorder started', mediaRecorder);
+        //alert('MediaRecorder started');
+    }
+
+    function stopRecording() {
+        mediaRecorder.stop();
+        console.log('Recorded Blobs: ', recordedBlobs);
+    }
+
+
+    var recordedBlobs = [];
+    var transferBlobs = [];
+    var isQuick = true;
+    var forIndex = 0;
+    var lower = 30;
+    var mimeType = 'video/webm; codecs="opus, vp8"';
+
+    function handleDataAvailable(event) {
+        if (event.data && event.data.size > 0) {
+            console.log('正在发送数据...');
+            document.getElementById('con').innerHTML = '正在发送数据...';
+            recordedBlobs.push(event.data);
+
+            if (isQuick) {
+                socket.send(event.data);
+            } else {
+                //按间隔发送
+                transferBlobs.push(event.data);
+                forIndex += 1;
+                document.getElementById('con').innerHTML = '正在发送数据...' + forIndex + ' ' + lower;
+                if (forIndex > lower) {
+                    console.log(getTime() + ' ' + transferBlobs.length);
+                    document.getElementById('con').innerHTML = getTime() + ' ' + transferBlobs.length;
+                    socket.send(new Blob(transferBlobs, {type: mimeType}));
+                    transferBlobs = [];
+                    forIndex = 0;
+                }
+            }
+
+        }
+    }
+
+    function handleStop(event) {
+        console.log('Recorder stopped: ', event);
+    }
+
+    function getTime() {
+        var date = new Date();
+        return date.getMinutes() + ':' + date.getSeconds() + ':' + date.getMilliseconds();
+    }
+
+
+    let dataConnections = [];
+
+
+    var types = [
+        'video/webm; codecs=vp8',
+        'video/webm;codecs=h264',
+        "video/webm;codecs=vp9",
+        'video/webm; codecs=vp8.0',
+        "video/webm; codecs=vorbis",
+        'video/webm; codecs="avc1.42E01E, mp4a.40.2"',
+        'video/webm; codecs="avc1.58A01E, mp4a.40.2"',
+        'video/webm; codecs="avc1.4D401E, mp4a.40.2"',
+        'video/webm; codecs="avc1.64001E, mp4a.40.2"',
+        'video/webm; codecs="mp4v.20.8, mp4a.40.2"',
+        'video/webm; codecs="mp4v.20.240, mp4a.40.2"',
+        "video/webm",
+        'video/mp4; codecs=avc1.42E01E',
+        'video/mp4; codecs=avc1.58A01E',
+        'video/mp4; codecs=avc1.4D401E',
+        'video/mp4; codecs=avc1.64001E',
+        'video/mp4; codecs=mp4v.20.8',
+        'video/mp4; codecs=mp4a.40.2',
+        'video/mp4',
+        'video/mp4; codecs="avc1.42E01E, mp4a.40.2"',
+        'video/mp4; codecs="avc1.58A01E, mp4a.40.2"',
+        'video/mp4; codecs="avc1.4D401E, mp4a.40.2"',
+        'video/mp4; codecs="avc1.64001E, mp4a.40.2"',
+        'video/mp4; codecs="mp4v.20.8, mp4a.40.2"',
+        'video/mp4; codecs="mp4v.20.240, mp4a.40.2"',
+        'video/ogg; codecs="theora, vorbis"',
+        'video/ogg; codecs="theora, speex"',
+        "video/mpeg"];
+
+    function check() {
+        var tmp;
+        tmp = "============================================webrtc支持==============================================";
+        show(tmp);
+        tmp = "Is navigator.mediaDevices.getUserMedia " + " supported? " + (navigator.mediaDevices.getUserMedia ? "Maybe!" : "Nope :(");
+        show(tmp);
+        tmp = "Is navigator.getUserMedia " + " supported? " + (navigator.getUserMedia ? "Maybe!" : "Nope :(");
+        show(tmp);
+
+        tmp = "============================================采集==============================================";
+        show(tmp);
+
+        for (var t in types) {
+            var tmp = "Is " + types[t] + " supported? " + (MediaRecorder.isTypeSupported(types[t]) ? "可能支持!" : "不支持 :(");
+            console.log(tmp);
+            let div = document.createElement('div');
+            div.innerText = tmp;
+            document.getElementById('con').appendChild(div)
+        }
+
+        var tmp = "============================================播放==============================================";
+        show(tmp);
+
+        for (var t in types) {
+            var tmp = "Is " + types[t] + " supported? " + (MediaSource.isTypeSupported(types[t]) ? "可能支持!" : "不支持 :(");
+            console.log(tmp);
+            let div = document.createElement('div');
+            div.innerText = tmp;
+            document.getElementById('con').appendChild(div)
+        }
+
+        var tmp = "Is window.MediaSource " + " supported? " + (window.MediaSource ? "Maybe!" : "Nope :(");
+        show(tmp);
+
+        tmp = "Is URL.revokeObjectURL " + " supported? " + (URL.revokeObjectURL ? "Maybe!" : "Nope :(");
+        show(tmp);
+    }
+
+    function show(tmp) {
+        //console.log(tmp);
+        let div = document.createElement('div');
+        div.innerText = tmp;
+        document.getElementById('con').appendChild(div);
+    }
+
+    check();
+
+
+    var showFlag = true;
+    var log = function () {
+        if (showFlag) {
+            console.log.apply(null, arguments);
+            var pre = document.getElementById('con2').innerHTML;
+            document.getElementById('con2').innerHTML = pre + JSON.stringify(arguments);
+        }
+    }
+
+
+    class DataConnection {
+        constructor(from, to, vid, rid, mimeType) {
+            this.dataBlobs = [];
+            this.isActive = false;
+            this.currentTime = 0;
+            this.startIndex = 0;
+//            this.reader = new FileReader();
+//            this.reader.addEventListener("load",
+//                    function() {
+//                        sourceBuffer.appendBuffer(this.result);
+//                    }
+//            );
+
+            this.from = from;
+            this.to = to;
+            this.vid = vid;
+            this.rid = rid;
+            this.mineType = mimeType;
+
+            var wsHeader = 'ws://';
+            if (location.protocol === 'https:') wsHeader = 'wss://';
+            this.dataConnection = new WebSocket(wsHeader + window.location.host + "/data?from=" + from + "&to=" + to + '&rid=' + rid);
+            this.dataConnection.binaryType = 'arraybuffer';
+            this.dataConnectionOpen = this.dataConnectionOpen.bind(this);
+            this.dataConnectionMessage = this.dataConnectionMessage.bind(this);
+            this.dataConnectionClose = this.dataConnectionClose.bind(this);
+            this.dataConnectionError = this.dataConnectionError.bind(this);
+            this.dataConnection.onopen = this.dataConnectionOpen;
+            this.dataConnection.onmessage = this.dataConnectionMessage;
+            this.dataConnection.onclose = this.dataConnectionClose;
+            this.dataConnection.onerror = this.dataConnectionError;
+
+            if (window.MediaSource) {
+                this.vidElement = document.getElementById(vid);
+                var mediaSource = new MediaSource();
+                this.vidElement.src = URL.createObjectURL(mediaSource);
+                this.sourceOpen = this.sourceOpen.bind(this);
+                this.sourceEnded = this.sourceEnded.bind(this);
+                this.sourceClose = this.sourceClose.bind(this);
+                mediaSource.addEventListener('sourceopen', this.sourceOpen);
+                mediaSource.addEventListener('sourceended', this.sourceEnded);
+                mediaSource.addEventListener('sourceclose', this.sourceClose);
+            } else {
+                console.log("The Media Source Extensions API is not supported.")
+            }
+        }
+
+
+        dataConnectionOpen() {
+            console.log("连接已经建立。", "connectionId=", this.toString());
+            var self = document.getElementById('self');
+            self.innerText = '用户 ' + uid;
+        }
+
+        dataConnectionMessage(event) {
+            console.log('正在接收数据...', event.data);
+            this.dataBlobs.push(event.data);
+            if (this.sourceBuffer) {
+                this.sourceBuffer.appendBuffer(event.data);
+            } else {
+                alert('no init sourceBuffer');
+            }
+            //this.reader.readAsArrayBuffer(event.data);
+            document.getElementById('con2').innerHTML = this.isActive + event.timeStamp;
+            if (!this.isActive) {
+                //var recordedVideo =  document.getElementById(this.vid);
+                //recordedVideo.play();
+                //this.onEnded = this.onEnded.bind(this);
+                //recordedVideo.onended = this.onEnded;
+                this.isActive = true;
+                document.getElementById(this.vid).click();
+            } else {
+                //this.sourceBuffer.remove(this.startIndex, this.startIndex+1);
+                this.startIndex += 1;
+                this.currentTime += 1;
+            }
+        }
+
+//        onEnded(e) {
+//            var recordedVideo =  document.getElementById(this.vid);
+//            var currentTime = recordedVideo.currentTime;
+//            console.log('onended '+currentTime);
+//            var superBuffer = new Blob(this.dataBlobs, {type: this.mineType});
+//            recordedVideo.src = window.URL.createObjectURL(superBuffer);
+//            recordedVideo.currentTime = currentTime;
+//            recordedVideo.play();
+//        };
+
+        dataConnectionClose() {
+            console.log("连接关闭。", "ERROR");
+        }
+
+        dataConnectionError() {
+            console.log("WebSocket错误。", "ERROR");
+        }
+
+
+        sourceOpen(e) {
+            console.log('sourceOpen');
+            //alert('sourceOpen');
+            URL.revokeObjectURL(this.vidElement.src);
+            var mime = this.mineType;
+            var mediaSource = e.target;
+            this.sourceBuffer = mediaSource.addSourceBuffer(mime);
+            this.streamPlay = this.streamPlay.bind(this);
+            this.sourceBuffer.addEventListener('updateend', this.streamPlay);
+        }
+
+        sourceEnded(e) {
+            console.log('sourceEnded');
+            //alert('sourceEnded');
+        }
+
+        streamPlay(e) {
+            var mediaSource = e.target;
+            log('...updating ', this.sourceBuffer.updating, '...readyState ', mediaSource.readyState);
+//            if (!this.sourceBuffer.updating && mediaSource.readyState === 'open') {
+//                //mediaSource.endOfStream();
+            document.getElementById(this.vid).play();
+//            }
+        }
+
+        sourceClose(e) {
+            console.log('sourceClose');
+            //alert('sourceClose');
+//            var mime = 'video/webm; codecs="vp8"';
+//            var mediaSource = e.target;
+//            this.sourceBuffer = mediaSource.addSourceBuffer(mime);
+        }
+
+
+        play() {
+            console.log(this.dataBlobs);
+            var recordedVideo = document.getElementById(this.vid);
+            //var superBuffer = new Blob(this.dataBlobs, {type: this.mineType});
+            //recordedVideo.src = window.URL.createObjectURL(superBuffer);
+            recordedVideo.currentTime = this.currentTime;
+            recordedVideo.play();
+            recordedVideo.onclick = function () {
+                log('new');
+            }
+            recordedVideo.onended = function () {
+                log('onended');
+            }
+        }
+
+        id() {
+            return this.from + '-' + this.to;
+        }
+
+        toString() {
+            return this.id() + ' by ' + this.vid;
+        }
+    }
+</script>
+</body>
+</html>
